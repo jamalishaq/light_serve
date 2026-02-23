@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -35,6 +36,9 @@ type serverConfig struct {
 	WriteTimeout     time.Duration
 	ShutdownDeadline time.Duration
 	RequestTimeout   time.Duration
+	TLSCertFile      string
+	TLSKeyFile       string
+	TLSMinVersion    uint16
 }
 
 // main starts the TCP listener and accepts incoming HTTP connections.
@@ -67,12 +71,29 @@ func main() {
 		return resp
 	})
 
-	listener, err := net.Listen("tcp", cfg.ListenAddress)
+	httpadapter.RegisterRoute("GET", "/", func(req *httpadapter.Request) *httpadapter.Response {
+		resp := httpadapter.NewResponse()
+		resp.StatusCode = 200
+		resp.SetHeader("Content-Type", "text/plain")
+		resp.WriteString("ok")
+		return resp
+	})
+
+	tlsCertificate, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		log.Fatalf("tls certificate: %v", err)
+	}
+	tlsConfig := &tls.Config{
+		MinVersion:   cfg.TLSMinVersion,
+		Certificates: []tls.Certificate{tlsCertificate},
+	}
+
+	listener, err := tls.Listen("tcp", cfg.ListenAddress, tlsConfig)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 
-	structuredLogger.Info("http adapter server listening", "address", cfg.ListenAddress)
+	structuredLogger.Info("https adapter server listening", "address", cfg.ListenAddress, "tls_min_version", tlsVersionName(cfg.TLSMinVersion))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -106,6 +127,18 @@ func loadServerConfigFromEnv() (serverConfig, error) {
 	if err != nil {
 		return serverConfig{}, err
 	}
+	tlsCertFile, err := parseRequiredFileEnv("LIGHT_SERVE_TLS_CERT_FILE")
+	if err != nil {
+		return serverConfig{}, err
+	}
+	tlsKeyFile, err := parseRequiredFileEnv("LIGHT_SERVE_TLS_KEY_FILE")
+	if err != nil {
+		return serverConfig{}, err
+	}
+	tlsMinVersion, err := parseTLSMinVersionEnv("LIGHT_SERVE_TLS_MIN_VERSION", tls.VersionTLS13)
+	if err != nil {
+		return serverConfig{}, err
+	}
 
 	return serverConfig{
 		ListenAddress:    ":" + strconv.Itoa(port),
@@ -113,6 +146,9 @@ func loadServerConfigFromEnv() (serverConfig, error) {
 		WriteTimeout:     writeTimeout,
 		ShutdownDeadline: shutdownDeadline,
 		RequestTimeout:   requestTimeout,
+		TLSCertFile:      tlsCertFile,
+		TLSKeyFile:       tlsKeyFile,
+		TLSMinVersion:    tlsMinVersion,
 	}, nil
 }
 
@@ -148,6 +184,49 @@ func parsePortEnv(envKey string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s: port must be between 1 and 65535", envKey)
 	}
 	return port, nil
+}
+
+// parseRequiredFileEnv reads a required file path env var and checks existence.
+func parseRequiredFileEnv(envKey string) (string, error) {
+	raw := strings.TrimSpace(os.Getenv(envKey))
+	if raw == "" {
+		return "", fmt.Errorf("%s: value is required", envKey)
+	}
+	if _, err := os.Stat(raw); err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("%s: file does not exist: %s", envKey, raw)
+		}
+		return "", fmt.Errorf("%s: file check failed: %w", envKey, err)
+	}
+	return raw, nil
+}
+
+// parseTLSMinVersionEnv reads TLS minimum version from env with fallback.
+func parseTLSMinVersionEnv(envKey string, fallback uint16) (uint16, error) {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(envKey)))
+	if raw == "" {
+		return fallback, nil
+	}
+	switch raw {
+	case "1.2", "tls1.2":
+		return tls.VersionTLS12, nil
+	case "1.3", "tls1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("%s: invalid value %q (allowed: 1.2, 1.3)", envKey, raw)
+	}
+}
+
+// tlsVersionName renders TLS version constants for structured logs.
+func tlsVersionName(version uint16) string {
+	switch version {
+	case tls.VersionTLS13:
+		return "1.3"
+	case tls.VersionTLS12:
+		return "1.2"
+	default:
+		return fmt.Sprintf("0x%x", version)
+	}
 }
 
 // serverRuntime owns accept loop and graceful shutdown lifecycle.

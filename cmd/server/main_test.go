@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -102,11 +105,15 @@ func TestServerRuntime_HandleConnSetsDeadlines(t *testing.T) {
 
 // TestLoadServerConfigFromEnv_Defaults verifies defaults when env vars are unset.
 func TestLoadServerConfigFromEnv_Defaults(t *testing.T) {
+	certFile, keyFile := createTempTLSFiles(t)
 	t.Setenv("LIGHT_SERVE_PORT", "")
 	t.Setenv("LIGHT_SERVE_READ_TIMEOUT", "")
 	t.Setenv("LIGHT_SERVE_WRITE_TIMEOUT", "")
 	t.Setenv("LIGHT_SERVE_SHUTDOWN_DEADLINE", "")
 	t.Setenv("LIGHT_SERVE_REQUEST_TIMEOUT", "")
+	t.Setenv("LIGHT_SERVE_TLS_CERT_FILE", certFile)
+	t.Setenv("LIGHT_SERVE_TLS_KEY_FILE", keyFile)
+	t.Setenv("LIGHT_SERVE_TLS_MIN_VERSION", "")
 
 	cfg, err := loadServerConfigFromEnv()
 	if err != nil {
@@ -128,15 +135,25 @@ func TestLoadServerConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.RequestTimeout != defaultRequestTimeout {
 		t.Fatalf("expected default request timeout %s, got %s", defaultRequestTimeout, cfg.RequestTimeout)
 	}
+	if cfg.TLSCertFile != certFile {
+		t.Fatalf("expected tls cert file %q, got %q", certFile, cfg.TLSCertFile)
+	}
+	if cfg.TLSKeyFile != keyFile {
+		t.Fatalf("expected tls key file %q, got %q", keyFile, cfg.TLSKeyFile)
+	}
 }
 
 // TestLoadServerConfigFromEnv_Overrides verifies valid env overrides are parsed.
 func TestLoadServerConfigFromEnv_Overrides(t *testing.T) {
+	certFile, keyFile := createTempTLSFiles(t)
 	t.Setenv("LIGHT_SERVE_PORT", "9090")
 	t.Setenv("LIGHT_SERVE_READ_TIMEOUT", "7s")
 	t.Setenv("LIGHT_SERVE_WRITE_TIMEOUT", "8s")
 	t.Setenv("LIGHT_SERVE_SHUTDOWN_DEADLINE", "12s")
 	t.Setenv("LIGHT_SERVE_REQUEST_TIMEOUT", "3s")
+	t.Setenv("LIGHT_SERVE_TLS_CERT_FILE", certFile)
+	t.Setenv("LIGHT_SERVE_TLS_KEY_FILE", keyFile)
+	t.Setenv("LIGHT_SERVE_TLS_MIN_VERSION", "1.2")
 
 	cfg, err := loadServerConfigFromEnv()
 	if err != nil {
@@ -158,6 +175,9 @@ func TestLoadServerConfigFromEnv_Overrides(t *testing.T) {
 	if cfg.RequestTimeout != 3*time.Second {
 		t.Fatalf("expected request timeout 3s, got %s", cfg.RequestTimeout)
 	}
+	if cfg.TLSMinVersion != tls.VersionTLS12 {
+		t.Fatalf("expected tls min version 1.2, got %#x", cfg.TLSMinVersion)
+	}
 }
 
 // TestLoadServerConfigFromEnv_InvalidValues verifies invalid env values fail fast.
@@ -172,15 +192,23 @@ func TestLoadServerConfigFromEnv_InvalidValues(t *testing.T) {
 		{name: "port out of range", key: "LIGHT_SERVE_PORT", value: "70000", expect: "between 1 and 65535"},
 		{name: "invalid duration", key: "LIGHT_SERVE_READ_TIMEOUT", value: "bad", expect: "invalid duration"},
 		{name: "non-positive duration", key: "LIGHT_SERVE_REQUEST_TIMEOUT", value: "0s", expect: "must be > 0"},
+		{name: "missing cert file", key: "LIGHT_SERVE_TLS_CERT_FILE", value: "", expect: "value is required"},
+		{name: "missing key file", key: "LIGHT_SERVE_TLS_KEY_FILE", value: "", expect: "value is required"},
+		{name: "invalid tls min version", key: "LIGHT_SERVE_TLS_MIN_VERSION", value: "1.1", expect: "invalid value"},
+		{name: "cert file not found", key: "LIGHT_SERVE_TLS_CERT_FILE", value: "C:/missing-cert.pem", expect: "file does not exist"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			certFile, keyFile := createTempTLSFiles(t)
 			t.Setenv("LIGHT_SERVE_PORT", "")
 			t.Setenv("LIGHT_SERVE_READ_TIMEOUT", "")
 			t.Setenv("LIGHT_SERVE_WRITE_TIMEOUT", "")
 			t.Setenv("LIGHT_SERVE_SHUTDOWN_DEADLINE", "")
 			t.Setenv("LIGHT_SERVE_REQUEST_TIMEOUT", "")
+			t.Setenv("LIGHT_SERVE_TLS_CERT_FILE", certFile)
+			t.Setenv("LIGHT_SERVE_TLS_KEY_FILE", keyFile)
+			t.Setenv("LIGHT_SERVE_TLS_MIN_VERSION", "")
 			t.Setenv(tt.key, tt.value)
 
 			_, err := loadServerConfigFromEnv()
@@ -192,6 +220,21 @@ func TestLoadServerConfigFromEnv_InvalidValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+// createTempTLSFiles creates placeholder cert/key files for config validation tests.
+func createTempTLSFiles(t *testing.T) (string, string) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	certFile := filepath.Join(tmpDir, "cert.pem")
+	keyFile := filepath.Join(tmpDir, "key.pem")
+	if err := os.WriteFile(certFile, []byte("dummy cert"), 0o600); err != nil {
+		t.Fatalf("write cert file: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte("dummy key"), 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+	return certFile, keyFile
 }
 
 // waitForActiveConn blocks until one connection is tracked or timeout is reached.
