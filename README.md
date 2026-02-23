@@ -2,11 +2,11 @@
 
 A custom HTTP/1.1 server built directly on top of TCP sockets in Go (without `net/http` request handling), following Clean Architecture principles.
 
-Version 1 focuses on a stable server foundation: manual HTTP parsing, routing, middleware, graceful shutdown, env-based runtime config, and structured logging.
+Version 1 focuses on a stable server foundation: manual HTTP parsing, routing, middleware, graceful shutdown, HTTPS-only runtime config, and structured logging.
 
 ## What v1 can do
 
-- Start a TCP HTTP server on a configurable port.
+- Start an HTTPS-only server on a configurable port.
 - Parse raw HTTP/1.1 requests into structured request objects.
 - Route handlers by `METHOD:PATH`.
 - Serve two starter endpoints:
@@ -49,6 +49,9 @@ All values are optional. If unset, defaults are used.
 - `LIGHT_SERVE_WRITE_TIMEOUT` (default: `5s`)
 - `LIGHT_SERVE_SHUTDOWN_DEADLINE` (default: `10s`)
 - `LIGHT_SERVE_REQUEST_TIMEOUT` (default: `2s`)
+- `LIGHT_SERVE_TLS_CERT_FILE` (required)
+- `LIGHT_SERVE_TLS_KEY_FILE` (required)
+- `LIGHT_SERVE_TLS_MIN_VERSION` (optional, default: `1.3`, allowed: `1.2`, `1.3`)
 
 Examples:
 
@@ -56,21 +59,27 @@ Examples:
 # bash/zsh (macOS/Linux)
 export LIGHT_SERVE_PORT=8081
 export LIGHT_SERVE_REQUEST_TIMEOUT=3s
+export LIGHT_SERVE_TLS_CERT_FILE=/absolute/path/cert.pem
+export LIGHT_SERVE_TLS_KEY_FILE=/absolute/path/key.pem
 ```
 
 ```powershell
 # PowerShell
 $env:LIGHT_SERVE_PORT="8081"
 $env:LIGHT_SERVE_REQUEST_TIMEOUT="3s"
+$env:LIGHT_SERVE_TLS_CERT_FILE="C:\path\to\cert.pem"
+$env:LIGHT_SERVE_TLS_KEY_FILE="C:\path\to\key.pem"
 ```
 
 ```cmd
 :: cmd.exe
 set LIGHT_SERVE_PORT=8081
 set LIGHT_SERVE_REQUEST_TIMEOUT=3s
+set LIGHT_SERVE_TLS_CERT_FILE=C:\path\to\cert.pem
+set LIGHT_SERVE_TLS_KEY_FILE=C:\path\to\key.pem
 ```
 
-## Run the server
+## Run the server (HTTPS only)
 
 From the project root:
 
@@ -78,7 +87,8 @@ From the project root:
 go run ./cmd/server
 ```
 
-You should see startup logs indicating the listening address.
+You should see startup logs indicating the HTTPS listening address.
+For local self-signed certs, use `curl -k` in the test commands below.
 
 ## Run with Docker
 
@@ -91,15 +101,22 @@ docker build -t light-serve:v1 .
 Run the container and publish port `8080`:
 
 ```sh
-docker run --rm -p 8080:8080 --name light-serve light-serve:v1
+docker run --rm -p 8080:8080 \
+  -v /absolute/path/certs:/certs:ro \
+  -e LIGHT_SERVE_TLS_CERT_FILE=/certs/cert.pem \
+  -e LIGHT_SERVE_TLS_KEY_FILE=/certs/key.pem \
+  --name light-serve light-serve:v1
 ```
 
 Run with custom runtime config (example):
 
 ```sh
 docker run --rm -p 8081:8081 \
+  -v /absolute/path/certs:/certs:ro \
   -e LIGHT_SERVE_PORT=8081 \
   -e LIGHT_SERVE_REQUEST_TIMEOUT=3s \
+  -e LIGHT_SERVE_TLS_CERT_FILE=/certs/cert.pem \
+  -e LIGHT_SERVE_TLS_KEY_FILE=/certs/key.pem \
   --name light-serve light-serve:v1
 ```
 
@@ -110,7 +127,7 @@ Open a second terminal while the server is running.
 ### 1) Health endpoint
 
 ```sh
-curl -i http://127.0.0.1:8080/health
+curl -k -i https://127.0.0.1:8080/health
 ```
 
 Expected:
@@ -120,7 +137,7 @@ Expected:
 ### 2) Hello endpoint
 
 ```sh
-curl -i http://127.0.0.1:8080/hello
+curl -k -i https://127.0.0.1:8080/hello
 ```
 
 Expected:
@@ -130,7 +147,7 @@ Expected:
 ### 3) Unknown path (`404`)
 
 ```sh
-curl -i http://127.0.0.1:8080/not-found
+curl -k -i https://127.0.0.1:8080/not-found
 ```
 
 Expected:
@@ -139,7 +156,7 @@ Expected:
 ### 4) Method not allowed (`405`)
 
 ```sh
-curl -i -X POST http://127.0.0.1:8080/health
+curl -k -i -X POST https://127.0.0.1:8080/health
 ```
 
 Expected:
@@ -165,6 +182,33 @@ go test ./internal/adapter/logging
 ```
 
 If your PowerShell setup aliases `curl` to a different command, use `curl.exe` explicitly.
+
+## CI/CD (GitHub Actions -> Azure Container Registry)
+
+This repository includes a workflow at `.github/workflows/ci-cd.yml` that:
+- runs CI (`go mod download`, `go test ./...`, `go build ./cmd/server`) on pull requests to `main` and on pushes to `main`
+- publishes a container image to ACR only on pushes to `main`
+
+### Required GitHub Secrets
+
+Add these repository secrets before using image publish:
+- `ACR_LOGIN_SERVER` (example: `myregistry.azurecr.io`)
+- `ACR_USERNAME`
+- `ACR_PASSWORD`
+
+### Published image tags
+
+On each successful push to `main`, the workflow pushes:
+- `myregistry.azurecr.io/light-serve:main`
+- `myregistry.azurecr.io/light-serve:sha-<short-commit-sha>`
+
+Replace `myregistry.azurecr.io` with your `ACR_LOGIN_SERVER` value.
+
+Example pull command:
+
+```sh
+docker pull myregistry.azurecr.io/light-serve:main
+```
 
 ## Notes for v1
 
