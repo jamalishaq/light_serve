@@ -79,6 +79,43 @@ set LIGHT_SERVE_TLS_CERT_FILE=C:\path\to\cert.pem
 set LIGHT_SERVE_TLS_KEY_FILE=C:\path\to\key.pem
 ```
 
+## Generate local TLS key pair (OpenSSL)
+
+Create a local self-signed certificate for `localhost` and `127.0.0.1`.
+
+```powershell
+# PowerShell (Windows)
+& "C:\Program Files\Git\usr\bin\openssl.exe" req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes `
+  -keyout "$PWD\certs\key.pem" `
+  -out "$PWD\certs\cert.pem" `
+  -subj "/CN=localhost" `
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+```bash
+# bash/zsh (Linux/macOS)
+mkdir -p certs
+openssl req -x509 -newkey rsa:2048 -sha256 -days 365 -nodes \
+  -keyout certs/key.pem \
+  -out certs/cert.pem \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+Then set absolute TLS file paths before running the server:
+
+```powershell
+$env:LIGHT_SERVE_TLS_CERT_FILE="$PWD\certs\cert.pem"
+$env:LIGHT_SERVE_TLS_KEY_FILE="$PWD\certs\key.pem"
+$env:LIGHT_SERVE_TLS_MIN_VERSION="1.3"
+```
+
+```bash
+export LIGHT_SERVE_TLS_CERT_FILE="$(pwd)/certs/cert.pem"
+export LIGHT_SERVE_TLS_KEY_FILE="$(pwd)/certs/key.pem"
+export LIGHT_SERVE_TLS_MIN_VERSION=1.3
+```
+
 ## Run the server (HTTPS only)
 
 From the project root:
