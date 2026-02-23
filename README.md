@@ -80,6 +80,29 @@ go run ./cmd/server
 
 You should see startup logs indicating the listening address.
 
+## Run with Docker
+
+Build the image from the project root:
+
+```sh
+docker build -t light-serve:v1 .
+```
+
+Run the container and publish port `8080`:
+
+```sh
+docker run --rm -p 8080:8080 --name light-serve light-serve:v1
+```
+
+Run with custom runtime config (example):
+
+```sh
+docker run --rm -p 8081:8081 \
+  -e LIGHT_SERVE_PORT=8081 \
+  -e LIGHT_SERVE_REQUEST_TIMEOUT=3s \
+  --name light-serve light-serve:v1
+```
+
 ## Test endpoints manually
 
 Open a second terminal while the server is running.
@@ -122,6 +145,8 @@ curl -i -X POST http://127.0.0.1:8080/health
 Expected:
 - `HTTP/1.1 405 Method Not Allowed`
 - `Allow: GET`
+
+The same endpoint checks work when running in Docker (using the published host port).
 
 ## Run tests
 

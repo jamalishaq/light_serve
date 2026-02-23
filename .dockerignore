@@ -1,0 +1,12 @@
+.git
+.gitignore
+.cursor
+server.exe
+*.log
+tmp
+tmp/
+bin
+bin/
+dist
+dist/
+coverage.out
